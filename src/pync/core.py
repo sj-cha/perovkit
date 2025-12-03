@@ -20,15 +20,14 @@ class Core:
     a: float
     n_cells: int
     surface_atoms: Dict[str, list[int]] = field(default_factory=dict)
-    plane_indices: Dict[Plane, Dict[str, list[int]]] = field(default_factory=dict)
+    plane_atoms: Dict[Plane, Dict[str, list[int]]] = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.surface_atoms:
             self._get_surface_atoms()
-        if not self.plane_indices:
+        if not self.plane_atoms:
             self._get_plane_indices()
    
-
     def _get_surface_atoms(
             self, 
             tol: float = 1e-2
@@ -57,7 +56,6 @@ class Core:
             surface_indices[element] = np.where(surface_flags)[0]
 
         self.surface_atoms = surface_indices
-
 
     def _get_plane_indices(self) -> dict[tuple[int, int, int], dict[str, list[int]]]:
         surface = self.surface_atoms  # {element: local_surface_indices}
@@ -89,7 +87,7 @@ class Core:
 
                 plane_indices[v][elem].append(int(gi))
 
-        self.plane_indices = {hkl: {elem: idxs for elem, idxs in elems.items()} for hkl, elems in plane_indices.items()}
+        self.plane_atoms = {hkl: {elem: idxs for elem, idxs in elems.items()} for hkl, elems in plane_indices.items()}
     
 
     @classmethod
@@ -158,7 +156,7 @@ class Core:
 
             net_charge = n_A * 1 + n_B * 2 - n_X * 1  
 
-            plane_indices = core.plane_indices
+            plane_indices = core.plane_atoms
             planes = list(plane_indices.keys())
 
             corners = [i for i in planes if np.all(i) == True] 
@@ -206,18 +204,3 @@ class Core:
         formula = self.atoms.get_chemical_formula()
 
         write(filename, self.atoms, format=fmt, comment=formula)
-
-if __name__ == "__main__":
-    core = Core.build_core(
-        A="Cs",
-        B="Pb",
-        X="Br",
-        a=5.95,
-        n_cells=5,
-        charge_neutral=True,
-        random_seed=42
-    )
-
-    core.to(fmt='xyz')
-
-    print(core.surface_atoms)
