@@ -12,6 +12,13 @@ import random
 Plane = Tuple[int, int, int]  
 
 @dataclass
+class BindingSite:
+    index: int              
+    symbol: str             
+    plane: Plane           
+    used: bool = False     
+
+@dataclass
 class Core:
     A: str
     B: str
@@ -19,15 +26,16 @@ class Core:
     atoms: Atoms
     a: float
     n_cells: int
-    surface_atoms: Dict[str, list[int]] = field(default_factory=dict)
-    plane_atoms: Dict[Plane, Dict[str, list[int]]] = field(default_factory=dict)
+    
+    plane_atoms: dict[Plane, dict[str, List[int]]] = field(default_factory=dict)
+    binding_sites: List[BindingSite] = field(default_factory=list)
 
     def __post_init__(self):
-        if not self.surface_atoms:
-            self._get_surface_atoms()
         if not self.plane_atoms:
             self._get_plane_indices()
-   
+        if not self.binding_sites:
+            self._build_binding_sites()
+
     def _get_surface_atoms(
             self, 
             tol: float = 1e-2
@@ -55,10 +63,10 @@ class Core:
             surface_flags = np.array(surface_flags, dtype=bool)
             surface_indices[element] = np.where(surface_flags)[0]
 
-        self.surface_atoms = surface_indices
+        return surface_indices
 
     def _get_plane_indices(self) -> dict[tuple[int, int, int], dict[str, list[int]]]:
-        surface = self.surface_atoms  # {element: local_surface_indices}
+        surface = self._get_surface_atoms()
         positions = np.array([a.position for a in self.atoms])
         symbols   = np.array([a.symbol   for a in self.atoms])
 
@@ -89,7 +97,26 @@ class Core:
 
         self.plane_atoms = {hkl: {elem: idxs for elem, idxs in elems.items()} for hkl, elems in plane_indices.items()}
     
+    def _build_binding_sites(self) -> None:
 
+        idx_to_site: Dict[int, BindingSite] = {}
+
+        for plane, elem_map in self.plane_atoms.items():
+            for elem, indices in elem_map.items():
+                for idx in indices:
+                    idx = int(idx)
+                    if idx in idx_to_site:
+                        continue
+
+                    idx_to_site[idx] = BindingSite(
+                        index=idx,
+                        symbol=elem,
+                        plane=plane,
+                        used=False,
+                    )
+
+        self.binding_sites = list(idx_to_site.values())
+        
     @classmethod
     # Currently only supports ABX3 perovskites with cubic structure
     def build_core(
@@ -194,6 +221,17 @@ class Core:
             assert n_A * 1 + n_B * 2 - n_X * 1 == 0, "Core is not charge neutral!"
 
         return core
+    
+    def remove(self, indices: List[int]) -> None:
+        """Remove atoms from core by index."""
+
+        mask = np.ones(len(self.atoms), dtype=bool)
+        mask[indices] = False
+        self.atoms = self.atoms[mask]
+
+        # Recompute surface atoms and binding sites
+        self._get_plane_indices()
+        self._build_binding_sites()
     
     def to(self, fmt: str = 'xyz', filename: str = None) -> None:
         """Export core structure to file."""
