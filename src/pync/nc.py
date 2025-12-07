@@ -6,6 +6,8 @@ from typing import List, Dict, Optional, Tuple
 import random
 import math
 import numpy as np
+from tqdm.auto import tqdm
+
 from ase import Atoms
 from ase.io import write
 
@@ -19,15 +21,20 @@ from utils.rotation import rotation_about_axis, rotation_from_u_to_v
 class NanoCrystal:
     core: Core
     ligand_specs: List[LigandSpec]
+    random_seed: int
+
+    # Rotation optimization parameters
     overlap_cutoff: float = 2.0   # Å
-    random_seed: Optional[int] = None
-    binding_sites: List[BindingSite] = field(default_factory=list)
+    coarse_step_deg: int = 18
+    fine_step_deg: int = 2
+    window_deg: int = 12
+
+    # NC attributes
     ligands: List[Ligand] = field(default_factory=list)
     displaced_indices: List[int] = field(default_factory=list)  # core atom indices removed
 
     def __post_init__(self):
-        if not self.binding_sites:
-            self.binding_sites = self.core.binding_sites
+        self.binding_sites = self.core.binding_sites
         self._rng = random.Random(self.random_seed)
         self.ligand_specs.sort(
             key=lambda spec: spec.ligand.volume,
@@ -43,7 +50,6 @@ class NanoCrystal:
 
         self.ligands = []
         self.displaced_indices = []
-        self.binding_sites = self.core.binding_sites
         core_positions = self.core.atoms.get_positions()
 
         A_sites = [s for s in self.binding_sites if s.symbol == self.core.A]
@@ -146,10 +152,10 @@ class NanoCrystal:
                                                                           neighbor_coords_map,
                                                                           self.overlap_cutoff
                                                                           )
-            print(f"[Log] Iter {iter}  global_min = {global_min:.3f} Å")
+            print(f"[Log] Iter {iter+1}  global_min = {global_min:.3f} Å")
 
             if global_min >= self.overlap_cutoff:
-                print("[Log] Hard cutoff satisfied. Done.")
+                print(f"[Log] Hard cutoff {self.overlap_cutoff} satisfied.")
                 break
 
             if not conflict_ligs:
@@ -159,10 +165,12 @@ class NanoCrystal:
             active_set = self._build_active_cluster(conflict_ligs, sites, site_positions)
 
             improved = False
-            active_order = active_set[:]
-            self._rng.shuffle(active_order)
+            self._rng.shuffle(active_set)
 
-            for i in active_order:
+            for i in tqdm(
+                active_set,
+                desc=f"Optimizing ligand (iter {iter+1})"
+            ):
                 neighbor_idx = neighbor_map.get(i, [])
                 other_ligs = [ligand_coords_list[j] for j in neighbor_idx]
 
@@ -241,7 +249,7 @@ class NanoCrystal:
                     n += 1
 
         print(
-            f"[Log] global min inter-entity distance = {global_min:.3f} Å "
+            f"[Log] global min distance = {global_min:.3f} Å "
             f"between {entity_labels[global_pair[0]]} and {entity_labels[global_pair[1]]}"
             f" (total overlaps: {n})"
         )
@@ -351,7 +359,7 @@ class NanoCrystal:
         site_positions: np.ndarray,
     ) -> List[int]:
 
-        radius = self.core.a + 1e-3
+        radius = self.core.a + 0.1
 
         if not conflict_ligs:
             return []
@@ -451,8 +459,9 @@ class NanoCrystal:
 
         ligand_i = ligands[i]
 
-        fine_step_deg = 2
-        coarse_step_deg = 12
+        coarse_step_deg = self.coarse_step_deg
+        fine_step_deg = self.fine_step_deg
+        window_deg = self.window_deg
 
         n_coarse = max(int(round(360.0 / coarse_step_deg)), 1)
 
@@ -500,7 +509,6 @@ class NanoCrystal:
             return best_theta, best_coords_i
 
         # Fine search 
-        window_deg = 10
         window_rad = math.radians(window_deg)
         fine_step_rad = math.radians(fine_step_deg)
 
@@ -580,9 +588,6 @@ class NanoCrystal:
 
     @property
     def atoms(self) -> Atoms:
-        """
-        Combined Atoms object of (core - displaced A/X) + all placed ligands.
-        """
         core_symbols = self.core.atoms.get_chemical_symbols()
         core_positions = self.core.atoms.get_positions()
 
@@ -610,61 +615,3 @@ class NanoCrystal:
             all_positions = base_positions
 
         return Atoms(symbols=all_symbols, positions=all_positions, pbc=False)
-
-
-if __name__ == "__main__":
-    import time 
-
-    start_time = time.time()
-    random_seed = 42
-
-    core = Core.build_core(
-        A="Cs",
-        B="Pb",
-        X="Br",
-        a=5.95,
-        n_cells=3,
-        charge_neutral=True,
-        random_seed=random_seed,
-    )
-
-    from ligand import BindingMotif
-
-    # cat_lig = Ligand.from_smiles(
-    #     smiles="CCCCCCCC/C=C\CCCCCCCC[NH3+]",
-    #     binding_motif=BindingMotif(["N"]),
-    #     random_seed=random_seed,
-    # )
-
-    #    e.g. Anionic ligand (displaces X sites)
-    an_lig = Ligand.from_smiles(
-        smiles="CCCCCCCC/C=C\CCCCCCCC(=O)[O-]",   
-        binding_motif=BindingMotif(["O", "O"]),
-        random_seed=random_seed,
-    )
-
-    cat_lig = Ligand.from_smiles(
-        smiles="C[NH3+]",
-        binding_motif=BindingMotif(["N"]),
-        random_seed=random_seed,
-    )
-
-    # an_lig = Ligand.from_xyz(
-    #     "../../ligands/3_OP.xyz",
-    #     charge = -1,
-    #     binding_motif=BindingMotif(["O", "O"]),
-    # )
-
-    specs = [
-        LigandSpec(ligand=cat_lig, coverage=0.3),  
-        LigandSpec(ligand=an_lig, coverage=0.3),  
-    ]
-
-    nc = NanoCrystal(core=core, ligand_specs=specs, random_seed=random_seed)
-    nc.place_ligands()
-
-    end_time = time.time()
-    print(f"Total time: {end_time - start_time:.2f} seconds")
-    nc.to(filename=f"CsPbBr3_{core.n_cells}x{core.n_cells}x{core.n_cells}_NC.xyz")
-
-    nc._debug_overlaps()
