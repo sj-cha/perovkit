@@ -44,20 +44,45 @@ class Ligand:
     def from_xyz(
         cls,
         xyz_path: str,
-        charge: int,
         binding_motif: BindingMotif,
+        charge: Optional[int] = None,
         name: Optional[str] = None
     ) -> Ligand:
         
         atoms = read(xyz_path)
         mol = Chem.MolFromXYZFile(rf"{xyz_path}")
-        rdDetermineBonds.DetermineBonds(mol,charge=charge)
-        no_H = Chem.RemoveHs(mol)
+
+        if charge is None:
+            candidate_charges = (-1, 0, 1)
+        else:
+            candidate_charges = (charge,)
+
+        chosen_mol = None
+        chosen_charge = None
+
+        for q in candidate_charges:
+            m = Chem.Mol(mol)
+            try:
+                rdDetermineBonds.DetermineBonds(m, charge=q)
+                Chem.SanitizeMol(m)
+            except Exception as e:
+                continue
+
+            chosen_mol = m
+            chosen_charge = q
+            break
+
+        if chosen_mol is None:
+            raise ValueError(
+                f"Failed to infer charge. Please provide the charge as an argument."
+            )
+
+        no_H = Chem.RemoveHs(chosen_mol)
         
         return cls(atoms=atoms, 
-                   mol=mol, 
+                   mol=chosen_mol, 
                    smiles = Chem.MolToSmiles(no_H), 
-                   charge=charge, 
+                   charge=chosen_charge, 
                    binding_motif=binding_motif,
                    name=name)
     
