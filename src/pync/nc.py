@@ -30,7 +30,7 @@ class NanoCrystal:
     coarse_step_deg: int = 18
     fine_step_deg: int = 2
     window_deg: int = 12
-    active_radius_factor: float = 1.5
+    active_radius_factor: float = math.sqrt(2)/2
 
     def __post_init__(self):
         self.core = deepcopy(self.core)
@@ -106,21 +106,18 @@ class NanoCrystal:
         site_planes = np.array([s.plane for s in sites], dtype=float)
 
         # Core atoms coordinates except displaced ones
-        surface_indices = np.concatenate(list(self.core.surface_atoms.values()))
-        disp_set = set(displaced_indices)
-        valid_surface_indices: List[int] = []
+        n_core = core_positions.shape[0]
+        core_mask = np.ones(n_core, dtype=bool)
 
-        for i in surface_indices:
-            if i not in disp_set:
-                valid_surface_indices.append(i)
+        for idx in displaced_indices:
+            if 0 <= idx < n_core:
+                core_mask[idx] = False
 
-        # Build KDTree for core surface atoms
-        if valid_surface_indices:
-            idx_arr = np.array(valid_surface_indices, dtype=int)
-            surface_coords = core_positions[idx_arr]
-            core_tree = cKDTree(surface_coords)
+        core_coords = core_positions[core_mask]
+
+        if core_coords.size > 0:
+            core_tree = cKDTree(core_coords)
         else:
-            surface_coords = np.empty((0, 3), dtype=float)
             core_tree = None
 
         self._core_tree = core_tree
@@ -137,20 +134,22 @@ class NanoCrystal:
             )
             ligand_coords_list.append(coords_i)
 
-        # Rotaation optimization loop
-        for iter in range(max_iters):
-            centers, radii = compute_bounding_spheres(ligand_coords_list)
-            neighbor_map: Dict[int, List[int]] = build_neighbor_map(centers, radii, self.overlap_cutoff)
+        # Rotation optimization loop
+        centers, radii = compute_bounding_spheres(ligand_coords_list)
+        neighbor_map: Dict[int, List[int]] = build_neighbor_map(
+            centers, radii, self.overlap_cutoff
+        )
+        global_min, conflict_ligs, dists = self._get_conflict_ligands(
+            ligand_coords_list,
+            neighbor_map,
+        )
+        print(f"[Log] Initial global_min = {global_min:.3f} Å")
 
-            global_min, conflict_ligs, dists = self._get_conflict_ligands(
-                ligand_coords_list,
-                neighbor_map
-                )
-
-            print(f"[Log] Iter {iter}  global_min = {global_min:.3f} Å")
-
+        for iter in range(1, max_iters + 1):
             if global_min >= self.overlap_cutoff:
-                print(f"[Log] Hard cutoff {self.overlap_cutoff} Å satisfied. Stopping optimization.")
+                print(
+                    f"[Log] Hard cutoff {self.overlap_cutoff:.3f} Å satisfied. Stopping optimization."
+                )
                 break
 
             active_cluster = self._build_active_cluster(conflict_ligs, site_positions)
@@ -160,7 +159,7 @@ class NanoCrystal:
 
             for i in tqdm(
                 active_cluster,
-                desc=f"Optimizing ligand (iter {iter+1})"
+                desc=f"Optimizing ligand (iter {iter})",
             ):
                 neighbor_idx = neighbor_map.get(i, [])
                 neighbors_coords = [ligand_coords_list[j] for j in neighbor_idx]
@@ -168,21 +167,30 @@ class NanoCrystal:
                 d_old = dists[i]
 
                 best_theta, best_coords = self._optimize_rotation(
-                    i, 
-                    ligands, 
+                    i,
+                    ligands,
                     neighbors_coords,
-                    site_planes, 
-                    site_positions
+                    site_planes,
+                    site_positions,
                 )
                 d_new = self._min_distance(best_coords, neighbors_coords)
+
                 if d_new > d_old + 1e-3:
                     ligand_coords_list[i] = best_coords
                     thetas[i] = best_theta
                     improved = True
 
             if not improved:
-                print("[Log] No improvement in active cluster. Stopping.")
+                print(f"[Log] No improvement in active cluster. Stopping.")
                 break
+
+            centers, radii = compute_bounding_spheres(ligand_coords_list)
+            neighbor_map = build_neighbor_map(centers, radii, self.overlap_cutoff)
+            global_min, conflict_ligs, dists = self._get_conflict_ligands(
+                ligand_coords_list,
+                neighbor_map,
+            )
+            print(f"[Log] Iter {iter}  global_min = {global_min:.3f} Å")
 
         # Apply final coordinates to Ligand
         for lig, coords in zip(ligands, ligand_coords_list):
