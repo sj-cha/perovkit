@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from copy import deepcopy
 from typing import List, Dict, Optional, Tuple
+import json
 
 import random
 import math
@@ -9,12 +10,12 @@ import numpy as np
 from tqdm.auto import tqdm
 
 from ase import Atoms
-from ase.io import write
+from ase.io import read, write
 
 from scipy.spatial import cKDTree 
 
 from .core import Core, BindingSite
-from .ligand import Ligand, LigandSpec
+from .ligand import Ligand, LigandSpec, BindingMotif
 from .utils.rotation import rotation_about_axis, rotation_from_u_to_v
 from .utils.geometry import farthest_point_sampling, compute_bounding_spheres, build_neighbor_map
 
@@ -24,9 +25,10 @@ class NanoCrystal:
     ligand_specs: List[LigandSpec]
     random_seed: int
     ligands: List[Ligand] = field(default_factory=list)
+    ligand_coverage: Dict[str, float] = field(default_factory=dict)
 
     # Rotation optimization parameters
-    overlap_cutoff: float = 2.0   # Å
+    overlap_cutoff: float = 1.8   # Å
     coarse_step_deg: int = 18
     fine_step_deg: int = 2
     window_deg: int = 12
@@ -92,6 +94,7 @@ class NanoCrystal:
 
             for site in chosen_sites:
                 lig_cloned = lig.clone()
+                lig_cloned.plane = site.plane
                 site.passivated = True
 
                 ligands.append(lig_cloned)
@@ -99,6 +102,7 @@ class NanoCrystal:
                 displaced_indices.append(site.index)
 
             print(f"[Log] Placed total {len(chosen_sites)} {ligand_type} ligands.")
+            self.ligand_coverage[spec.ligand.name] = spec.coverage
 
         n_lig = len(ligands)
         assert n_lig > 0, "No ligands to place."
@@ -392,6 +396,9 @@ class NanoCrystal:
                 best_min_d = min_d
                 best_coords_i = coords_i
 
+        if best_min_d >= cutoff:
+            return best_theta, best_coords_i
+        
         # Fine search 
         window_rad = math.radians(window_deg)
         fine_step_rad = math.radians(fine_step_deg)
@@ -423,6 +430,174 @@ class NanoCrystal:
         at = self.atoms
         formula = at.get_chemical_formula()
         write(filename, at, format=fmt, comment=formula)
+        self.to_json(filename + ".json")
+
+    def to_json(self, json_path: str) -> None:
+
+        core_meta = {
+            "A": self.core.A,
+            "B": self.core.B,
+            "X": self.core.X,
+            "a": self.core.a,
+            "n_cells": self.core.n_cells,
+            "n_core_atoms": len(self.core.atoms),
+        }
+
+        ligand_types_meta = []
+        type_key_to_id: Dict[tuple, int] = {}
+        type_counts: Dict[int, int] = {}
+
+        for lig in self.ligands:
+            key = (
+                lig.name,
+                lig.smiles,
+                lig.charge,
+                tuple(lig.binding_motif.atoms),
+            )
+
+            if key not in type_key_to_id:
+                type_id = len(ligand_types_meta)
+                type_key_to_id[key] = type_id
+                type_counts[type_id] = 0
+
+                ligand_types_meta.append(
+                    {
+                        "id": type_id,
+                        "name": lig.name,
+                        "smiles": lig.smiles,
+                        "charge": lig.charge,
+                        "binding_motif_atoms": list(lig.binding_motif.atoms),
+                        "coverage": self.ligand_coverage.get(lig.name),
+                        "n_atoms": len(lig.atoms),
+                        "volume": float(lig.volume),
+                    }
+                )
+
+            type_id = type_key_to_id[key]
+            type_counts[type_id] += 1
+
+        for meta in ligand_types_meta:
+            meta["n_instances"] = type_counts[meta["id"]]
+
+        ligands_meta = []
+        for i, lig in enumerate(self.ligands):
+            key = (
+                lig.name,
+                lig.smiles,
+                lig.charge,
+                tuple(lig.binding_motif.atoms),
+            )
+            spec_id = type_key_to_id[key]
+
+            ligands_meta.append(
+                {   
+                    "ligand_id": i,
+                    "spec_id": spec_id,
+                    "plane": list(lig.plane)
+                }
+            )
+
+        n_total_atoms = core_meta["n_core_atoms"] + sum(
+            t["n_atoms"] * t["n_instances"] for t in ligand_types_meta
+        )
+
+        topo = {
+            "schema_version": 1,
+            "n_total_atoms": n_total_atoms,
+            "core": core_meta,
+            "ligand_types": ligand_types_meta,
+            "ligands": ligands_meta,
+        }
+
+        with open(json_path, "w") as f:
+            json.dump(topo, f, indent=2)
+
+    @classmethod
+    def from_xyz(cls, xyz_path: str, json_path: str) -> NanoCrystal:
+
+        atoms = read(xyz_path)
+
+        with open(json_path) as f:
+            topo = json.load(f)
+
+        schema_version = topo.get("schema_version", 1)
+        if schema_version != 1:
+            raise ValueError(f"Unsupported schema_version: {schema_version!r}")
+
+        n_total_atoms_json = topo["n_total_atoms"]
+        if n_total_atoms_json != len(atoms):
+            raise ValueError(
+                f"Atom count mismatch: JSON={n_total_atoms_json}, XYZ={len(atoms)}."
+            )
+
+        core_meta = topo["core"]
+        n_core_atoms = core_meta["n_core_atoms"]
+
+        if n_core_atoms > len(atoms):
+            raise ValueError(
+                f"n_core_atoms={n_core_atoms}, but XYZ has only {len(atoms)} atoms."
+            )
+
+        core_atoms = atoms[:n_core_atoms]
+
+        core = Core(
+            A=core_meta["A"],
+            B=core_meta["B"],
+            X=core_meta["X"],
+            atoms=core_atoms,
+            a=core_meta["a"],
+            n_cells=core_meta["n_cells"],
+        )
+
+        ligand_types_meta = topo["ligand_types"]
+        type_id_to_meta: Dict[int, dict] = {
+            t["id"]: t for t in ligand_types_meta
+        }
+
+        ligands_meta = topo["ligands"]
+        ligands: List[Ligand] = []
+        cursor = n_core_atoms
+
+        for inst_meta in ligands_meta:
+            spec_id = inst_meta["spec_id"]
+            tmeta = type_id_to_meta[spec_id]
+
+            n_atoms = tmeta["n_atoms"]
+
+            if cursor + n_atoms > len(atoms):
+                raise ValueError(
+                    f"Ligand slice out of range: need up to {cursor + n_atoms}, "
+                    f"but XYZ has only {len(atoms)} atoms."
+                )
+
+            lig_atoms = atoms[cursor : cursor + n_atoms]
+            cursor += n_atoms
+
+            lig = object.__new__(Ligand)
+            lig.atoms = lig_atoms
+            lig.mol = None                      
+            lig.smiles = tmeta["smiles"]
+            lig.charge = tmeta["charge"]
+            lig.binding_motif = BindingMotif(tmeta["binding_motif_atoms"])
+            lig.name = tmeta["name"]
+            lig.plane = (
+                tuple(inst_meta["plane"])
+                if inst_meta["plane"] is not None
+                else None
+            )
+            lig.volume = tmeta["volume"]
+
+            ligands.append(lig)
+
+        nc = cls(
+            core=core,
+            ligand_specs=[],  
+            random_seed=0,    
+        )
+        nc.ligands = ligands
+        nc.ligand_coverage = {t["name"]: t["coverage"] for t in ligand_types_meta}
+
+        return nc
 
     @property
     def atoms(self) -> Atoms:

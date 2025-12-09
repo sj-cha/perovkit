@@ -28,7 +28,7 @@ class Ligand:
     charge: int
     binding_motif: BindingMotif
 
-    name: Optional[str] = None
+    name: str
     plane: Optional[Plane] = None
 
     volume: float = field(default_factory=float) 
@@ -44,8 +44,8 @@ class Ligand:
         cls,
         xyz_path: str,
         binding_motif: BindingMotif,
-        charge: Optional[int] = None,
-        name: Optional[str] = None
+        name: str,
+        charge: Optional[int] = None,     
     ) -> Ligand:
         
         atoms = read(xyz_path)
@@ -91,7 +91,7 @@ class Ligand:
         smiles: str,
         binding_motif: BindingMotif,
         random_seed: int,
-        name: Optional[str] = None
+        name: str
     ) -> Ligand:
         
         mol = Chem.MolFromSmiles(smiles)
@@ -258,3 +258,8 @@ class Ligand:
 class LigandSpec:
     ligand: Ligand
     coverage: float
+    name: Optional[str] = None
+
+    def __post_init__(self):
+        if self.name is None:
+            self.name = self.ligand.name
