@@ -229,6 +229,7 @@ class NanoCrystal:
             cell=core_atoms.get_cell(),
         )
 
+        self.core._build_octahedra()
         self._build_index_map()
 
     def _min_distance(
@@ -470,7 +471,8 @@ class NanoCrystal:
             "a": self.core.a,
             "n_cells": self.core.n_cells,
             "n_core_atoms": len(self.core.atoms),
-            "indices": None if self.core.indices is None else self.core.indices.tolist()
+            "indices": None if self.core.indices is None else self.core.indices.tolist(),
+            "octahedra": None if self.core.octahedra is None else self.core.octahedra
         }
 
         ligand_types_meta = []
@@ -583,6 +585,8 @@ class NanoCrystal:
             atoms=core_atoms,
             a=core_meta["a"],
             n_cells=core_meta["n_cells"],
+            octahedra=core_meta["octahedra"],
+            indices=core_indices,
             build_surface=False,
         )
 

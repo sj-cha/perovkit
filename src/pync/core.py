@@ -6,6 +6,7 @@ from collections import defaultdict
 import numpy as np
 from ase import Atoms
 from ase.io import read, write
+from scipy.spatial import cKDTree
 
 import random
 
@@ -27,6 +28,7 @@ class Core:
     a: float
     n_cells: int
     indices: Optional[np.ndarray] = None
+    octahedra: Dict[int, Dict[str, List[int]]] = field(default_factory=dict)
 
     build_surface: bool = True
     surface_atoms: Dict[str, np.ndarray] = field(init=False)
@@ -36,86 +38,6 @@ class Core:
     def __post_init__(self):
         self.surface_atoms = self._get_surface_atoms() if self.build_surface else {}
         self.binding_sites = self._build_binding_sites() if self.build_surface else []
-
-    def _get_surface_atoms(
-            self, 
-            tol: float = 1e-2
-    ) -> dict[str, np.ndarray]:
-        
-        surface_indices = {}
-
-        for element in [self.A, self.X]:
-            # mask & positions for this element
-            atoms = [i for i in self.atoms if i.symbol == element] 
-            positions = np.array([atom.position for atom in atoms])
-
-            # element-wise min/max along x,y,z
-            mins = positions.min(axis=0)
-            maxs = positions.max(axis=0)
-
-            # for each atom of this element, check if it's on any boundary plane
-            surface_flags = []
-            for p in positions:
-                on_min = np.isclose(p, mins, atol=tol)
-                on_max = np.isclose(p, maxs, atol=tol)
-                # surface if on min or max in at least one direction
-                surface_flags.append(np.any(on_min | on_max))
-
-            surface_flags = np.array(surface_flags, dtype=bool)
-            surface_indices[element] = np.where(surface_flags)[0]
-
-        return surface_indices
-
-    def _build_binding_sites(self) -> None:
-        surface = self._get_surface_atoms()
-        positions = np.array([a.position for a in self.atoms])
-        symbols   = np.array([a.symbol   for a in self.atoms])
-
-        tol = 1e-3
-        plane_indices = defaultdict(lambda: defaultdict(list))
-
-        for elem, local_idxs in surface.items():
-            # Global indices for this element
-            elem_global = np.where(symbols == elem)[0]
-            elem_pos    = positions[elem_global]
-            mins, maxs  = elem_pos.min(0), elem_pos.max(0)
-
-            for li in local_idxs:
-                gi = elem_global[li]
-                p  = positions[gi]
-
-                is_max = np.isclose(p, maxs, atol=tol)
-                is_min = np.isclose(p, mins, atol=tol)
-
-                # +1 for max plane, -1 for min plane, 0 otherwise
-                v = tuple(int(x) for x in (is_max.astype(int) - is_min.astype(int)))
-                nz = np.count_nonzero(v)
-
-                if nz == 0:
-                    continue 
-
-                plane_indices[v][elem].append(int(gi))
-
-        plane_atoms = {hkl: {elem: idxs for elem, idxs in elems.items()} for hkl, elems in plane_indices.items()}
-        self.plane_atoms = plane_atoms
-
-        idx_to_site: Dict[int, BindingSite] = {}
-
-        for plane, elem_map in plane_atoms.items():
-            for elem, indices in elem_map.items():
-                for idx in indices:
-                    idx = int(idx)
-                    if idx in idx_to_site:
-                        continue
-
-                    idx_to_site[idx] = BindingSite(
-                        index=idx,
-                        symbol=elem,
-                        plane=plane,
-                        passivated=False,
-                    )
-
-        return list(idx_to_site.values())
         
     @classmethod
     # Currently only supports ABX3 perovskites with cubic structure
@@ -221,16 +143,6 @@ class Core:
 
         return core
     
-    def remove(self, indices: List[int]) -> None:
-        """Remove atoms from core by index."""
-
-        mask = np.ones(len(self.atoms), dtype=bool)
-        mask[indices] = False
-        self.atoms = self.atoms[mask]
-
-        # Recompute surface atoms and binding sites
-        self._build_binding_sites()
-    
     def to(self, fmt: str = 'xyz', filename: str = None) -> None:
         """Export core structure to file."""
 
@@ -240,3 +152,113 @@ class Core:
         formula = self.atoms.get_chemical_formula()
 
         write(filename, self.atoms, format=fmt, comment=formula)
+
+    def _get_surface_atoms(
+            self, 
+            tol: float = 1e-2
+    ) -> dict[str, np.ndarray]:
+        
+        surface_indices = {}
+
+        for element in [self.A, self.X]:
+            # mask & positions for this element
+            atoms = [i for i in self.atoms if i.symbol == element] 
+            positions = np.array([atom.position for atom in atoms])
+
+            # element-wise min/max along x,y,z
+            mins = positions.min(axis=0)
+            maxs = positions.max(axis=0)
+
+            # for each atom of this element, check if it's on any boundary plane
+            surface_flags = []
+            for p in positions:
+                on_min = np.isclose(p, mins, atol=tol)
+                on_max = np.isclose(p, maxs, atol=tol)
+                # surface if on min or max in at least one direction
+                surface_flags.append(np.any(on_min | on_max))
+
+            surface_flags = np.array(surface_flags, dtype=bool)
+            surface_indices[element] = np.where(surface_flags)[0]
+
+        return surface_indices
+
+    def _build_binding_sites(self) -> None:
+        surface = self._get_surface_atoms()
+        positions = np.array([a.position for a in self.atoms])
+        symbols   = np.array([a.symbol   for a in self.atoms])
+
+        tol = 1e-3
+        plane_indices = defaultdict(lambda: defaultdict(list))
+
+        for elem, local_idxs in surface.items():
+            # Global indices for this element
+            elem_global = np.where(symbols == elem)[0]
+            elem_pos    = positions[elem_global]
+            mins, maxs  = elem_pos.min(0), elem_pos.max(0)
+
+            for li in local_idxs:
+                gi = elem_global[li]
+                p  = positions[gi]
+
+                is_max = np.isclose(p, maxs, atol=tol)
+                is_min = np.isclose(p, mins, atol=tol)
+
+                # +1 for max plane, -1 for min plane, 0 otherwise
+                v = tuple(int(x) for x in (is_max.astype(int) - is_min.astype(int)))
+                nz = np.count_nonzero(v)
+
+                if nz == 0:
+                    continue 
+
+                plane_indices[v][elem].append(int(gi))
+
+        plane_atoms = {hkl: {elem: idxs for elem, idxs in elems.items()} for hkl, elems in plane_indices.items()}
+        self.plane_atoms = plane_atoms
+
+        idx_to_site: Dict[int, BindingSite] = {}
+
+        for plane, elem_map in plane_atoms.items():
+            for elem, indices in elem_map.items():
+                for idx in indices:
+                    idx = int(idx)
+                    if idx in idx_to_site:
+                        continue
+
+                    idx_to_site[idx] = BindingSite(
+                        index=idx,
+                        symbol=elem,
+                        plane=plane,
+                        passivated=False,
+                    )
+
+        return list(idx_to_site.values())
+    
+    def _build_octahedra(self) -> None:
+
+        at = self.atoms
+        syms = np.array(at.get_chemical_symbols())
+        pos = at.get_positions()
+
+        pb_idx = np.where(syms == self.B)[0]
+        br_idx = np.where(syms == self.X)[0]
+
+        PB_pos = pos[pb_idx]
+        BR_pos = pos[br_idx]
+
+        # KD-tree for Br atoms
+        tree = cKDTree(BR_pos)
+        r_cut = self.a + 1e-2
+        neigh_lists = tree.query_ball_point(PB_pos, r_cut)
+
+        octahedra = {}
+
+        for loc, br_local_list in enumerate(neigh_lists):
+            pb_abs = int(pb_idx[loc])  
+            br_abs_list = [int(br_idx[j]) for j in br_local_list]
+
+            octahedra[pb_abs] = {
+                "Pb": [pb_abs],
+                "Br": br_abs_list,
+            }
+
+        self.octahedra = octahedra
