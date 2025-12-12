@@ -30,7 +30,8 @@ class Ligand:
 
     name: str
     plane: Optional[Plane] = None
-    neighbor_cutoff: float = 2.0
+    _neighbor_cutoff: float = 2.0
+    _anchor_offset: float = 0.0
 
     volume: float = field(default_factory=float) 
     binding_atoms: List[int] = field(default_factory=list)
@@ -171,7 +172,7 @@ class Ligand:
 
             # cKDTree neighbor counting within 2 Å
             tree = cKDTree(coords)
-            neighbors = tree.query_ball_point(elem_coords, r=self.neighbor_cutoff)
+            neighbors = tree.query_ball_point(elem_coords, r=self._neighbor_cutoff)
 
             # coordination number excluding self
             cn = np.fromiter((len(nbrs) - 1 for nbrs in neighbors), dtype=int)
@@ -264,6 +265,7 @@ class Ligand:
 class LigandSpec:
     ligand: Ligand
     coverage: float
+    anchor_offset: float = 0.0
     name: Optional[str] = None
 
     def __post_init__(self):

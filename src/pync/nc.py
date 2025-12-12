@@ -99,6 +99,7 @@ class NanoCrystal:
             for site in chosen_sites:
                 lig_cloned = lig.clone()
                 lig_cloned.plane = site.plane
+                lig_cloned._anchor_offset = float(spec.anchor_offset)
                 site.passivated = True
 
                 ligands.append(lig_cloned)
@@ -343,8 +344,10 @@ class NanoCrystal:
         R_rot = rotation_about_axis(plane, theta)
         coords_rot = coords_aligned @ R_rot.T
 
+        anchor_offset = float(getattr(ligand, "_anchor_offset", 0.0))
+
         # Translate to binding site position
-        coords_final = coords_rot + site_pos
+        coords_final = coords_rot + site_pos + plane / np.linalg.norm(plane) * anchor_offset
 
         return coords_final
 
@@ -632,7 +635,7 @@ class NanoCrystal:
             )
             lig.volume = tmeta["volume"]
             lig.binding_atoms = []
-            lig.neighbor_cutoff = 2.0
+            lig._neighbor_cutoff = 2.0
             ligands.append(lig)
 
         nc = cls(
