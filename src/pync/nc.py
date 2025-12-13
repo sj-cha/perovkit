@@ -213,23 +213,24 @@ class NanoCrystal:
             self.ligands.append(lig)
 
         # Update core by removing displaced atoms           
-        core_atoms = self.core.atoms
-        core_symbols = core_atoms.get_chemical_symbols()
-        core_positions = core_atoms.get_positions()
-
-        core_mask = np.ones(len(core_symbols), dtype=bool)
-        for idx in displaced_indices:
-            if 0 <= idx < len(core_mask):
-                core_mask[idx] = False
-
+        core_symbols = self.core.atoms.get_chemical_symbols()
         stripped_symbols = [s for s, keep in zip(core_symbols, core_mask) if keep]
         stripped_positions = core_positions[core_mask]
 
-        self.core.atoms = Atoms(
+        stripped_atoms = Atoms(
             symbols=stripped_symbols,
             positions=stripped_positions,
-            pbc=core_atoms.pbc,
-            cell=core_atoms.get_cell(),
+            pbc=False
+        )
+
+        self.core = Core(
+            A=self.core.A,
+            B=self.core.B,
+            X=self.core.X,
+            atoms=stripped_atoms,
+            a=self.core.a,
+            n_cells=self.core.n_cells,
+            build_surface=False,
         )
 
         self._build_octahedra()
