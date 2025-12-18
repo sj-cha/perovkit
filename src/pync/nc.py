@@ -256,6 +256,59 @@ class NanoCrystal:
             move_ligands=move_ligands,
         )
 
+    
+    def check_overlaps(self, cutoff: float = None) -> float:
+        if cutoff is None:
+            cutoff = self.overlap_cutoff
+
+        core_positions = self.core.atoms.get_positions()
+
+        entities = []
+        entity_labels = []
+
+        if core_positions.size > 0:
+            entities.append(core_positions)
+            entity_labels.append("core")
+
+        for i, lig in enumerate(self.ligands):
+            entities.append(lig.atoms.get_positions())
+            entity_labels.append(f"ligand_{i}")
+
+        print(f"[DEBUG] #entities (core + ligands) = {len(entities)}")
+
+        global_min = np.inf
+        global_pair = None
+
+        n = 0
+
+        for i in range(len(entities)):
+            for j in range(i + 1, len(entities)):
+                A = entities[i]
+                B = entities[j]
+                diff = A[:, None, :] - B[None, :, :]
+                d2 = np.sum(diff * diff, axis=-1)
+                min_idx = np.argmin(d2)
+                d_min = float(np.sqrt(d2.flat[min_idx]))
+
+                if d_min < global_min:
+                    global_min = d_min
+                    global_pair = (i, j)
+
+                if d_min < cutoff:
+                    print(
+                        f"[OVERLAP] {entity_labels[i]} vs {entity_labels[j]}: "
+                        f"min distance = {d_min:.3f} Å < {cutoff:.3f} Å"
+                    )
+                    n += 1
+
+        print(
+            f"[Log] global min inter-entity distance = {global_min:.3f} Å "
+            f"between {entity_labels[global_pair[0]]} and {entity_labels[global_pair[1]]}"
+            f" (total overlaps: {n})"
+        )
+
+        return global_min
+
 
     def _min_distance(
         self,
