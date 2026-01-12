@@ -30,13 +30,6 @@ class NanoCrystal:
     ligand_coverage: Dict[str, float] = field(default_factory=dict)
     octahedra: Optional[Dict[int, dict]] = None
 
-    # Rotation optimization parameters
-    overlap_cutoff: float = 2.0   # Å
-    coarse_step_deg: int = 18
-    fine_step_deg: int = 2
-    window_deg: int = 12
-    active_radius_factor: float = math.sqrt(2)/2
-
     def __post_init__(self):
         self.core = deepcopy(self.core)
         if getattr(self.core, "binding_sites", None):
@@ -54,10 +47,21 @@ class NanoCrystal:
 
     def place_ligands(
         self,
-        max_iters: int = 10
+        max_iters: int = 10,
+        overlap_cutoff: float = 2.0,   # Å
+        coarse_step_deg: int = 18,
+        fine_step_deg: int = 2,
+        window_deg: int = 12,
+        active_radius_factor: float = math.sqrt(2)/2
     ) -> None:
         
         assert not self.ligands, "Ligands have already been placed."
+
+        self.overlap_cutoff = overlap_cutoff
+        self.coarse_step_deg = coarse_step_deg
+        self.fine_step_deg = fine_step_deg
+        self.window_deg = window_deg
+        self.active_radius_factor = active_radius_factor
         
         self.ligands = []
         displaced_indices = []
