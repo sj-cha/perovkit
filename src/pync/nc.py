@@ -32,6 +32,12 @@ class NanoCrystal:
 
     def __post_init__(self):
         self.core = deepcopy(self.core)
+
+        if getattr(self.core, "is_slab", False):
+            raise ValueError(
+                "NanoCrystal got a slab-mode Core. Use Slab class instead."
+            )
+    
         if getattr(self.core, "binding_sites", None):
             self.binding_sites = deepcopy(self.core.binding_sites)
         else:
