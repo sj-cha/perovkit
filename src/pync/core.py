@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, Tuple, List, Optional, Sequence
 from collections import defaultdict
 
@@ -263,12 +264,8 @@ class Core:
             cell[2] *= (1 + float(strain[2]))
             self.atoms.set_cell(cell, scale_atoms=False)
 
-    def to(self, fmt, filename: Optional[str] = None) -> None:
-        if fmt == "vasp":
-            out = filename or "POSCAR"
-            write_vasp(out, self.atoms, sort=True)
-            return
 
+    def to(self, fmt, filename: Optional[str] = None) -> None:
         if filename is None:
             if self.is_slab:
                 nx, ny, nz = self.supercell or (0, 0, 0)
@@ -277,8 +274,16 @@ class Core:
                 nc = self.n_cells if self.n_cells is not None else "NA"
                 filename = f"{self.A}{self.B}{self.X}3_{nc}.{fmt}"
 
-        formula = self.atoms.get_chemical_formula()
-        write(filename, self.atoms, format=fmt, comment=formula)
+        path = Path(filename)
+        path.parent.mkdir(parents=True, exist_ok=True)  
+        
+        if fmt == "vasp":
+            write_vasp(str(path), self.atoms, sort=True)
+            return
+
+        else:
+            formula = self.atoms.get_chemical_formula()
+            write(str(path), self.atoms, format=fmt, comment=formula)
 
 
     def _get_surface_atoms(self, tol: float = 1e-2) -> Dict[str, np.ndarray]:
