@@ -199,7 +199,7 @@ class Core:
             symbols=symbols,
             scaled_positions=scaled,
             cell=np.eye(3) * float(a),
-            pbc=True,
+            pbc=True
         )
 
         atoms = bulk.repeat((nx, ny, nz + 1))
@@ -210,7 +210,7 @@ class Core:
         atoms = atoms[keep]
 
         atoms.set_cell([nx * float(a), ny * float(a), nz * float(a) + float(vacuum)])
-        atoms.set_pbc((True, True, True))
+        atoms.set_pbc((True, True, False))
 
         slab = cls(
             A=A,
@@ -322,24 +322,29 @@ class Core:
         tol = 1e-3
         plane_indices = defaultdict(lambda: defaultdict(list))
 
-        for elem, idxs in surface.items():
-            elem_global = np.where(symbols == elem)[0]
-            elem_pos = positions[elem_global]
-            if elem_pos.size == 0:
-                continue
-
-            mins, maxs = elem_pos.min(0), elem_pos.max(0)
-
-            for i in idxs:
-                p = positions[int(i)]
-                is_max = np.isclose(p, maxs, atol=tol)
-                is_min = np.isclose(p, mins, atol=tol)
-
-                v = tuple(int(x) for x in (is_max.astype(int) - is_min.astype(int)))
-                if np.count_nonzero(v) == 0:
+        if self.is_slab:
+            for elem, idxs in surface.items():
+                for i in idxs:
+                    plane_indices[(0, 0, 1)][elem].append(int(i))            
+        else:
+            for elem, idxs in surface.items():
+                elem_global = np.where(symbols == elem)[0]
+                elem_pos = positions[elem_global]
+                if elem_pos.size == 0:
                     continue
 
-                plane_indices[v][elem].append(int(i))
+                mins, maxs = elem_pos.min(0), elem_pos.max(0)
+
+                for i in idxs:
+                    p = positions[int(i)]
+                    is_max = np.isclose(p, maxs, atol=tol)
+                    is_min = np.isclose(p, mins, atol=tol)
+
+                    v = tuple(int(x) for x in (is_max.astype(int) - is_min.astype(int)))
+                    if np.count_nonzero(v) == 0:
+                        continue
+
+                    plane_indices[v][elem].append(int(i))
 
         self.plane_atoms = {
             hkl: {elem: idxs for elem, idxs in elems.items()}
