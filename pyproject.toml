@@ -1,7 +1,7 @@
 [project]
-name = "pync"
+name = "perovkit"
 version = "0.1.0"
-description = "PyNC: A Framework for Generating and Analyzing Ligand-passivated Perovskite Nanocrystals"
+description = "PerovKit: A Framework for Generating and Analyzing Ligand-passivated Perovskite Nanocrystals"
 authors = [
     { name="Seungjun Cha", email="scha@gatech.edu" }
 ]

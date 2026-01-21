@@ -3,4 +3,4 @@
 __pycache__/
 *.pyc
 *.pyo
-src/pync.egg-info/
+src/perovkit.egg-info/
