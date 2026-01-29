@@ -10,7 +10,7 @@ from ase import Atoms
 from ase.io import write
 from ase.io.vasp import write_vasp
 from scipy.spatial import cKDTree
-from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
+from ase.data import covalent_radii, atomic_numbers
 
 import random
 
@@ -241,7 +241,7 @@ class Core:
             raise ValueError(f"Bound must satisfy 0 <= low <= high, got {bound}")
 
         symbols = self.atoms.get_chemical_symbols()
-        radii = np.array([CovalentRadius.radius[s] for s in symbols], dtype=float)
+        radii = np.array([covalent_radii[atomic_numbers[s]] for s in symbols], dtype=float)
         mags = rand_uniform(radii * lo, radii * hi)
 
         dirs = rand_uniform(-1.0, 1.0, size=(len(self.atoms), 3))
