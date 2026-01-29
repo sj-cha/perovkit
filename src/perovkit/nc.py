@@ -95,19 +95,27 @@ class NanoCrystal:
 
             available = [s for s in pool if not s.passivated]
 
-            # Coverage
-            if 0.0 < spec.coverage <= 1.0:
-                n_target = int(math.ceil(spec.coverage * len(available)))
+            if spec.binding_sites is not None:
+                chosen_sites = []
+                for idx in spec.binding_sites:
+                    site = next((s for s in available if s.index == idx), None)
+                    if site is not None:
+                        chosen_sites.append(site)
+                    else:
+                        print(f"[Warning] Requested binding site index {idx} not available for ligand {lig.name}.")
             else:
-                n_target = int(spec.coverage)
-                if n_target > len(available):
-                    print(f"[Warning] Requested {n_target} sites for ligand, "
-                          f"but only {len(available)} available.")
-                    n_target = len(available)
+                if 0.0 < spec.coverage <= 1.0:
+                    n_target = int(math.ceil(spec.coverage * len(available)))
+                else:
+                    n_target = int(spec.coverage)
+                    if n_target > len(available):
+                        print(f"[Warning] Requested {n_target} sites for ligand, "
+                            f"but only {len(available)} available.")
+                        n_target = len(available)
 
-            coords = np.array([core_positions[s.index] for s in available])
-            chosen_indices = farthest_point_sampling(coords, n_target, self._rng)
-            chosen_sites = [available[i] for i in chosen_indices]
+                coords = np.array([core_positions[s.index] for s in available])
+                chosen_indices = farthest_point_sampling(coords, n_target, self._rng)
+                chosen_sites = [available[i] for i in chosen_indices]
 
             for site in chosen_sites:
                 lig_cloned = lig.clone()

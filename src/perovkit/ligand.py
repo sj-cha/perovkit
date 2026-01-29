@@ -264,7 +264,8 @@ class Ligand:
 @dataclass
 class LigandSpec:
     ligand: Ligand
-    coverage: float
+    coverage: Optional[float] = None
+    binding_sites: Optional[list[int]] = None
     anchor_offset: float = 0.0
     name: Optional[str] = None
 
