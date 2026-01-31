@@ -267,6 +267,159 @@ class Slab:
         self._build_index_map()
 
 
+    def place_ligands_manually(
+        self,
+        cat_x_move: float = 0.0,
+        cat_y_move: float = 0.0,
+        cat_z_move: float = 0.0,
+        cat_z_rotate: float = 0.0,
+        an_x_move: float = 0.0,
+        an_y_move: float = 0.0,
+        an_z_move: float = 0.0,
+        an_z_rotate: float = 0.0,
+    ):
+        assert not self.ligands, "Ligands have already been placed."
+        
+        self.ligands = []
+        displaced_indices = []
+        for s in self.binding_sites:
+            s.passivated = False
+
+        core_positions = self.core.atoms.get_positions()
+
+        A_sites = [s for s in self.binding_sites if s.symbol == self.core.A]
+        X_sites = [s for s in self.binding_sites if s.symbol == self.core.X]
+
+        ligands: List[Ligand] = []
+        sites: List[BindingSite] = []
+
+        for spec in self.ligand_specs:
+            lig = spec.ligand
+            charge = lig.charge
+
+            if charge > 0:
+                pool = A_sites
+                ligand_type = "A-site"
+            else: 
+                pool = X_sites
+                ligand_type = "X-site"
+
+            available = [s for s in pool if not s.passivated]
+            
+            if spec.binding_sites is not None:
+                chosen_sites = []
+                for idx in spec.binding_sites:
+                    site = next((s for s in available if s.index == idx), None)
+                    if site is not None:
+                        chosen_sites.append(site)
+                    else:
+                        print(f"[Warning] Requested binding site index {idx} not available for ligand {lig.name}.")
+            else:
+                if 0.0 < spec.coverage <= 1.0:
+                    n_target = int(math.ceil(spec.coverage * len(available)))
+                else:
+                    n_target = int(spec.coverage)
+                    if n_target > len(available):
+                        print(f"[Warning] Requested {n_target} sites for ligand, "
+                            f"but only {len(available)} available.")
+                        n_target = len(available)
+
+                coords = np.array([core_positions[s.index] for s in available])
+                chosen_indices = farthest_point_sampling(coords, n_target, self._rng)
+                chosen_sites = [available[i] for i in chosen_indices]
+
+            for site in chosen_sites:
+                lig_cloned = lig.clone()
+                lig_cloned.plane = site.plane
+                lig_cloned._anchor_offset = float(spec.anchor_offset)
+                site.passivated = True
+
+                ligands.append(lig_cloned)
+                sites.append(site)
+                displaced_indices.append(site.index)
+
+            print(f"[Log] Placed total {len(chosen_sites)} {ligand_type} ligands.")
+            self.ligand_coverage[spec.ligand.name] = spec.coverage
+
+        n_lig = len(ligands)
+        assert n_lig > 0, "No ligands to place."
+
+        # Binding site positions and planes
+        site_positions = np.array([core_positions[s.index] for s in sites])
+        site_planes = np.array([s.plane for s in sites], dtype=float)
+
+        # Core atoms coordinates except displaced ones
+        n_core = core_positions.shape[0]
+        core_mask = np.ones(n_core, dtype=bool)
+
+        for idx in displaced_indices:
+            if 0 <= idx < n_core:
+                core_mask[idx] = False
+
+        ligand_coords_list: List[np.ndarray] = []
+        for i in range(n_lig):
+            if ligands[i].charge > 0:
+                x_move = cat_x_move
+                y_move = cat_y_move
+                z_move = cat_z_move
+                z_rotate = math.radians(cat_z_rotate)
+            else:
+                x_move = an_x_move
+                y_move = an_y_move
+                z_move = an_z_move
+                z_rotate = math.radians(an_z_rotate)
+            coords_i = self._place_one_ligand(
+                ligands[i],
+                site_planes[i],
+                site_positions[i],
+                z_rotate,
+                x_move=x_move,
+                y_move=y_move,
+                z_move=z_move
+            )
+            ligand_coords_list.append(coords_i)
+
+        # Apply final coordinates to Ligand
+        max_z = 0
+        for lig, coords in zip(ligands, ligand_coords_list):
+            lig.atoms.set_positions(coords)
+            lig.id = len(self.ligands)
+            self.ligands.append(lig)
+
+            if coords[:, 2].max() > max_z:
+                max_z = coords[:, 2].max()
+
+        # Update core by removing displaced atoms           
+        core_symbols = self.core.atoms.get_chemical_symbols()
+        stripped_symbols = [s for s, keep in zip(core_symbols, core_mask) if keep]
+        stripped_positions = core_positions[core_mask]
+
+        old = self.core
+        stripped_atoms = Atoms(
+            symbols=stripped_symbols,
+            positions=stripped_positions,
+            pbc=old.atoms.pbc,
+            cell=old.atoms.get_cell(),
+        )
+
+        stripped_atoms.cell[2, 2] = max_z + old.vacuum
+        
+        self.core = Core(
+            A=old.A, 
+            B=old.B, 
+            X=old.X,
+            atoms=stripped_atoms,
+            a=old.a,
+            supercell=old.supercell,
+            vacuum=old.vacuum,
+            build_surface=False,
+        )
+
+        self._build_octahedra()
+        self._build_B_ijk()
+        self._build_index_map()
+
+
     def apply_tilt(
         self,
         glazer: str,
@@ -517,6 +670,9 @@ class Slab:
         plane: np.ndarray,
         site_pos: np.ndarray,
         theta: float,
+        x_move: float = None,
+        y_move: float = None,
+        z_move: float = None
     ) -> np.ndarray:
 
         coords_loc = ligand.atoms.get_positions()
@@ -540,6 +696,13 @@ class Slab:
 
         # Translate to binding site position
         coords_final = coords_rot + anchor_pos
+        
+        if x_move is not None:
+            coords_final[:, 0] += x_move
+        if y_move is not None:
+            coords_final[:, 1] += y_move
+        if z_move is not None:
+            coords_final[:, 2] += z_move
 
         return coords_final
 
@@ -730,7 +893,7 @@ class Slab:
         path = Path(filename)
         path.parent.mkdir(parents=True, exist_ok=True)  
         
-        write_vasp(str(path), self.atoms, sort=True)
+        write_vasp(str(path), self.atoms, sort=True, direct= True)
         self.to_json(str(path) + ".json")
 
 
