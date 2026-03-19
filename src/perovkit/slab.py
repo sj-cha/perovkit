@@ -885,7 +885,7 @@ class Slab:
             cursor += n
 
 
-    def to(self, fmt='vasp', filename: Optional[str] = None) -> None:
+    def to(self, fmt='vasp', filename: Optional[str] = None, write_json: bool = True) -> None:
         assert fmt == 'vasp', "Only 'vasp' format is supported currently."
         assert len(self.ligands) > 0, "No ligands placed. Cannot export Slab."
         
@@ -899,7 +899,8 @@ class Slab:
         path.parent.mkdir(parents=True, exist_ok=True)  
         
         write_vasp(str(path), self.atoms, sort=True, direct= True)
-        self.to_json(str(path) + ".json")
+        if write_json:
+            self.to_json(str(path) + ".json")
 
 
     def to_json(self, json_path: str) -> None:
